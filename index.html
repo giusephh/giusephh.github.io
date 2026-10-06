@@ -101,6 +101,7 @@
         });
 
         // Data sync loop running every 1 second
+                // Data sync loop running every 1 second
         async function syncData() {
             try {
                 await fetch(WEB_PLAYER_URL, {
@@ -113,27 +114,24 @@
                 let pData = await pResponse.json();
                 localRobloxPlayers = (pData && pData !== "null") ? pData : {};
 
-                // Fetch base path to bypass local security flags
+                // Fetch base path directly
                 let cResponse = await fetch(CHATS_URL);
                 let cData = await cResponse.json();
                 
                 if (cData && cData !== "null") {
                     for (let id in cData) {
                         let chat = cData[id];
-                        let messageAge = Date.now() - chat.timestamp;
                         
-                        if (messageAge < 15000) { // Keep buffer window matched to server parameters
-                            if (!loggedChatIDs.has(id)) {
-                                loggedChatIDs.add(id);
-                                
-                                // FIXED CONDITIONAL: Accurately parse source origins
-                                const isRobloxSource = !chat.sender.startsWith("WebPlayer_");
-                                appendToChatDisplay(chat.sender, chat.text, isRobloxSource);
-                            }
+                        // TIME GATE REMOVED: If it exists in the database, show it!
+                        if (!loggedChatIDs.has(id)) {
+                            loggedChatIDs.add(id);
+                            
+                            const isRobloxSource = !chat.sender.startsWith("WebPlayer_");
+                            appendToChatDisplay(chat.sender, chat.text, isRobloxSource);
+                        }
 
-                            if (chat.sender !== MY_USERNAME) {
-                                activeBubbles[chat.sender] = { text: chat.text, expiry: Date.now() + 4000 };
-                            }
+                        if (chat.sender !== MY_USERNAME) {
+                            activeBubbles[chat.sender] = { text: chat.text, expiry: Date.now() + 4000 };
                         }
                     }
                 }
