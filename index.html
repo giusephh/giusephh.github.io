@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Roblox Sync Web Client</title>
+    <style>
+        body { margin: 0; background: #222; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+        h1 { margin: 10px 0 0 0; }
+        p { margin: 5px 0 15px 0; color: #aaa; }
+        #gameWrapper { display: flex; gap: 20px; background: #1a1a1a; padding: 20px; border-radius: 10px; border: 1px solid #444; }
+        canvas { background: #111; border: 2px solid #555; display: block; }
+        #chatPanel { width: 300px; display: flex; flex-direction: column; background: #111; border: 2px solid #555; height: 600px; box-sizing: border-box; }
+        #chatDisplay { flex-grow: 1; padding: 10px; overflow-y: auto; text-align: left; font-size: 14px; font-family: monospace; display: flex; flex-direction: column; gap: 6px; }
+        .msg { word-wrap: break-word; line-height: 1.4; }
+        .web-msg { color: #5dade2; }
+        .roblox-msg { color: #f24444; }
+        #chatInput { padding: 12px; width: 100%; border: none; border-top: 2px solid #555; background: #252525; color: white; box-sizing: border-box; outline: none; }
+    </style>
+</head>
+<body>
+
+    <h1>Web Browser Client</h1>
+    <p>Grey Circle = You | Red Squares = Live Roblox Players</p>
+    
+    <div id="gameWrapper">
+        <canvas id="gameCanvas" width="600" height="600"></canvas>
+        
+        <!-- NEW: Dedicated Web Chat Window Interface -->
+        <div id="chatPanel">
+            <div id="chatDisplay"></div>
+            <input type="text" id="chatInput" placeholder="Type a message & press Enter..." maxlength="100" />
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const chatInput = document.getElementById("chatInput");
+        const chatDisplay = document.getElementById("chatDisplay");
+
+        // --- CONFIGURATION ---
+        // REPLACE WITH YOUR EXACT BASE FIREBASE LINK
+        const FIREBASE_BASE_URL = "https://robloxwebbridge-bd089-default-rtdb.firebaseio.com/";
+
+        const MY_USERNAME = "WebPlayer_" + Math.floor(Math.random() * 1000);
+        const WEB_PLAYER_URL = `${FIREBASE_BASE_URL}web/${MY_USERNAME}.json`;
+        const ROBLOX_PLAYERS_URL = `${FIREBASE_BASE_URL}roblox.json`;
+        const CHATS_URL = `${FIREBASE_BASE_URL}chats.json`;
+
+        let myPos = { x: 0, z: 0 };
+        let localRobloxPlayers = {};
+        let activeBubbles = {};
+        let loggedChatIDs = new Set(); // Prevents repeating message logs on screen
+
+        function disconnectPlayer() {
+            navigator.sendBeacon(WEB_PLAYER_URL, JSON.stringify(null)); 
+        }
+        window.addEventListener("beforeunload", disconnectPlayer);
+        window.addEventListener("unload", disconnectPlayer);
+        window.addEventListener("pagehide", disconnectPlayer);
+
+        window.addEventListener("keydown", (e) => {
+            if (document.activeElement === chatInput) return;
+            if (e.key === "ArrowUp" || e.key === "w") myPos.z -= 8;
+            if (e.key === "ArrowDown" || e.key === "s") myPos.z += 8;
+            if (e.key === "ArrowLeft" || e.key === "a") myPos.x -= 8;
+            if (e.key === "ArrowRight" || e.key === "d") myPos.x += 8;
+        });
+
+        // Add message cleanly to the browser window list
+        function appendToChatDisplay(sender, text, isRoblox) {
+            const msgEl = document.createElement("div");
+            msgEl.className = `msg ${isRoblox ? 'roblox-msg' : 'web-msg'}`;
+            msgEl.innerHTML = `<strong>[${sender}]:</strong> ${text}`;
+            chatDisplay.appendChild(msgEl);
+            chatDisplay.scrollTop = chatDisplay.scrollHeight; // Auto-scroll down
+        }
+
+        // Send chat out to Firebase
+        chatInput.addEventListener("keydown", async (e) => {
+            if (e.key === "Enter" && chatInput.value.trim() !== "") {
+                const messageText = chatInput.value;
+                chatInput.value = "";
+                
+                activeBubbles[MY_USERNAME] = { text: messageText, expiry: Date.now() + 4000 };
+
+                try {
+                    await fetch(CHATS_URL, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            sender: MY_USERNAME,
+                            text: messageText,
+                            timestamp: Date.now()
+                        })
+                    });
+                } catch(err) { console.log("Chat routing failed:", err); }
+            }
+        });
+
+        // Data loop running every 1 second
+        async function syncData() {
+            try {
+                // 1. Upload position alongside a fresh heartbeat timestamp
+                await fetch(WEB_PLAYER_URL, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ x: myPos.x, z: myPos.z, lastSeen: Date.now() })
+                });
+
+                // 2. Fetch Roblox Players
+                let pResponse = await fetch(ROBLOX_PLAYERS_URL);
+                let pData = await pResponse.json();
+                localRobloxPlayers = (pData && pData !== "null") ? pData : {};
+
+                // FIXED: We download the base path directly. This completely bypasses the browser CORS security block.
+                let cResponse = await fetch(CHATS_URL);
+                let cData = await cResponse.json();
+                
+                if (cData && cData !== "null") {
+                    for (let id in cData) {
+                        let chat = cData[id];
+                        
+                        // Check if message is newer than 10 seconds locally
+                        let messageAge = Date.now() - chat.timestamp;
+                        
+                        if (messageAge < 10000) {
+                            // Append to the HTML scrolling text panel if it hasn't been added yet
+                            if (!loggedChatIDs.has(id)) {
+                                loggedChatIDs.add(id);
+                                const isRobloxSource = !chat.sender.startsWith("WebPlayer_");
+                                appendToChatDisplay(chat.sender, chat.text, isRobloxSource);
+                            }
+
+                            if (chat.sender !== MY_USERNAME) {
+                                activeBubbles[chat.sender] = { text: chat.text, expiry: Date.now() + 4000 };
+                            }
+                        }
+                    }
+                }
+            } catch (err) { console.log("Database connection error:", err); }
+        }
+
+        setInterval(syncData, 1000);
+
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let visualMyX = myPos.x + (canvas.width / 2);
+            let visualMyZ = myPos.z + (canvas.height / 2);
+
+            ctx.fillStyle = "#888";
+            ctx.beginPath();
+            ctx.arc(visualMyX, visualMyZ, 15, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#fff";
+            ctx.fillText("You (Web)", visualMyX - 25, visualMyZ - 20);
+
+            if (activeBubbles[MY_USERNAME] && activeBubbles[MY_USERNAME].expiry > Date.now()) {
+                drawChatBubble(activeBubbles[MY_USERNAME].text, visualMyX, visualMyZ - 35);
+            }
+
+            ctx.fillStyle = "#ff4444";
+            for (let name in localRobloxPlayers) {
+                let robloxPlayer = localRobloxPlayers[name];
+                if (robloxPlayer && typeof robloxPlayer.x === "number") {
+                    let canvasX = robloxPlayer.x + (canvas.width / 2);
+                    let canvasZ = robloxPlayer.z + (canvas.height / 2);
+
+                    ctx.fillRect(canvasX - 12, canvasZ - 12, 24, 24);
+                    ctx.fillStyle = "#fff";
+                    ctx.fillText(name + " (Roblox)", canvasX - 35, canvasZ - 20);
+
+                    if (activeBubbles[name] && activeBubbles[name].expiry > Date.now()) {
+                        drawChatBubble(activeBubbles[name].text, canvasX, canvasZ - 35);
+                    }
+                }
+            }
+            requestAnimationFrame(drawGame);
+        }
+
+        function drawChatBubble(text, x, y) {
+            ctx.fillStyle = "rgba(255,255,255,0.9)";
+            ctx.font = "12px sans-serif";
+            let textWidth = ctx.measureText(text).width;
+            ctx.fillRect(x - (textWidth/2) - 8, y - 14, textWidth + 16, 20);
+            ctx.fillStyle = "#000";
+            ctx.fillText(text, x - (textWidth/2), y);
+        }
+
+        drawGame();
+    </script>
+</body>
+</html>
