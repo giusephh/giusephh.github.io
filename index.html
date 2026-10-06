@@ -9,11 +9,16 @@
         p { margin: 5px 0 15px 0; color: #aaa; }
         #gameWrapper { display: flex; gap: 20px; background: #1a1a1a; padding: 20px; border-radius: 10px; border: 1px solid #444; }
         canvas { background: #111; border: 2px solid #555; display: block; }
+        
+        /* --- CHAT VIEWPORT WINDOW STYLING --- */
         #chatPanel { width: 300px; display: flex; flex-direction: column; background: #111; border: 2px solid #555; height: 600px; box-sizing: border-box; }
-        #chatDisplay { flex-grow: 1; padding: 10px; overflow-y: auto; text-align: left; font-size: 14px; font-family: monospace; display: flex; flex-direction: column; gap: 6px; }
-        .msg { word-wrap: break-word; line-height: 1.4; }
-        .web-msg { color: #5dade2; }
-        .roblox-msg { color: #f24444; }
+        #chatDisplay { flex-grow: 1; padding: 10px; overflow-y: auto; text-align: left; font-size: 14px; font-family: monospace; display: flex; flex-direction: column; gap: 8px; }
+        
+        /* FIXED VISIBILITY: Explicitly declare fonts and weights for both text sources */
+        .msg { word-wrap: break-word; line-height: 1.4; display: block; font-size: 13px; font-family: sans-serif; padding: 2px 0; }
+        .web-msg { color: #5dade2 !important; }    /* Cyan blue for Web */
+        .roblox-msg { color: #ff4444 !important; } /* High-visibility red for Roblox */
+        
         #chatInput { padding: 12px; width: 100%; border: none; border-top: 2px solid #555; background: #252525; color: white; box-sizing: border-box; outline: none; }
     </style>
 </head>
@@ -24,8 +29,6 @@
     
     <div id="gameWrapper">
         <canvas id="gameCanvas" width="600" height="600"></canvas>
-        
-        <!-- NEW: Dedicated Web Chat Window Interface -->
         <div id="chatPanel">
             <div id="chatDisplay"></div>
             <input type="text" id="chatInput" placeholder="Type a message & press Enter..." maxlength="100" />
@@ -39,7 +42,7 @@
         const chatDisplay = document.getElementById("chatDisplay");
 
         // --- CONFIGURATION ---
-        // REPLACE WITH YOUR EXACT BASE FIREBASE LINK
+        // REPLACE WITH YOUR EXACT BASE FIREBASE LINK (Keep the trailing slash!)
         const FIREBASE_BASE_URL = "https://robloxwebbridge-bd089-default-rtdb.firebaseio.com/";
 
         const MY_USERNAME = "WebPlayer_" + Math.floor(Math.random() * 1000);
@@ -50,10 +53,10 @@
         let myPos = { x: 0, z: 0 };
         let localRobloxPlayers = {};
         let activeBubbles = {};
-        let loggedChatIDs = new Set(); // Prevents repeating message logs on screen
+        let loggedChatIDs = new Set(); 
 
         function disconnectPlayer() {
-            navigator.sendBeacon(WEB_PLAYER_URL, JSON.stringify(null)); 
+            fetch(WEB_PLAYER_URL, { method: "PUT", body: JSON.stringify(null), keepalive: true });
         }
         window.addEventListener("beforeunload", disconnectPlayer);
         window.addEventListener("unload", disconnectPlayer);
@@ -67,16 +70,15 @@
             if (e.key === "ArrowRight" || e.key === "d") myPos.x += 8;
         });
 
-        // Add message cleanly to the browser window list
+        // FIXED DISPLAY METHOD: Dynamically matches class markers cleanly
         function appendToChatDisplay(sender, text, isRoblox) {
             const msgEl = document.createElement("div");
             msgEl.className = `msg ${isRoblox ? 'roblox-msg' : 'web-msg'}`;
             msgEl.innerHTML = `<strong>[${sender}]:</strong> ${text}`;
             chatDisplay.appendChild(msgEl);
-            chatDisplay.scrollTop = chatDisplay.scrollHeight; // Auto-scroll down
+            chatDisplay.scrollTop = chatDisplay.scrollHeight; 
         }
 
-        // Send chat out to Firebase
         chatInput.addEventListener("keydown", async (e) => {
             if (e.key === "Enter" && chatInput.value.trim() !== "") {
                 const messageText = chatInput.value;
@@ -94,40 +96,37 @@
                             timestamp: Date.now()
                         })
                     });
-                } catch(err) { console.log("Chat routing failed:", err); }
+                } catch(err) { console.log("Chat failed:", err); }
             }
         });
 
-        // Data loop running every 1 second
+        // Data sync loop running every 1 second
         async function syncData() {
             try {
-                // 1. Upload position alongside a fresh heartbeat timestamp
                 await fetch(WEB_PLAYER_URL, {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ x: myPos.x, z: myPos.z, lastSeen: Date.now() })
                 });
 
-                // 2. Fetch Roblox Players
                 let pResponse = await fetch(ROBLOX_PLAYERS_URL);
                 let pData = await pResponse.json();
                 localRobloxPlayers = (pData && pData !== "null") ? pData : {};
 
-                // FIXED: We download the base path directly. This completely bypasses the browser CORS security block.
+                // Fetch base path to bypass local security flags
                 let cResponse = await fetch(CHATS_URL);
                 let cData = await cResponse.json();
                 
                 if (cData && cData !== "null") {
                     for (let id in cData) {
                         let chat = cData[id];
-                        
-                        // Check if message is newer than 10 seconds locally
                         let messageAge = Date.now() - chat.timestamp;
                         
-                        if (messageAge < 10000) {
-                            // Append to the HTML scrolling text panel if it hasn't been added yet
+                        if (messageAge < 15000) { // Keep buffer window matched to server parameters
                             if (!loggedChatIDs.has(id)) {
                                 loggedChatIDs.add(id);
+                                
+                                // FIXED CONDITIONAL: Accurately parse source origins
                                 const isRobloxSource = !chat.sender.startsWith("WebPlayer_");
                                 appendToChatDisplay(chat.sender, chat.text, isRobloxSource);
                             }
@@ -140,7 +139,6 @@
                 }
             } catch (err) { console.log("Database connection error:", err); }
         }
-
         setInterval(syncData, 1000);
 
         function drawGame() {
